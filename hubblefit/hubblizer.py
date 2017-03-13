@@ -32,7 +32,7 @@ PECULIAR_VELOCITY = 300 # in km/s
 #   Main Tools                #
 #                             #
 ###############################
-def get_hubblefit(data, corr=["x1,c"], **kwargs):
+def get_hubblefit(data, corr=["x1","c"], **kwargs):
     """ get an object that allows you to do Hubble fit (hubblizer)
 
     Parameters
