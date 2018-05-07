@@ -160,12 +160,12 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
     # ---------- #
     # PLOTTER    #
     # ---------- #
-    def show(self, show_res=True,
-                 show_uncorr=False, show_legend = True,
+    def show(self, figsize=[6,5],show_res=True,
+                 show_uncorr=False, show_legend = True, show_label = True,
                  propmodel={}, propuncorr={}, **kwargs):
         """ """
         import matplotlib.pyplot as mpl
-        fig = mpl.figure()
+        fig = mpl.figure(figsize=figsize)
         if not show_res:
             ax    = fig.add_axes(111)
         else:
@@ -227,6 +227,11 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
             
         if show_legend:
             ax.legend(loc="best")
+
+        if show_label:
+            fig.axes[-1].set_xlabel("redshift", fontsize="medium")
+            fig.axes[0].set_ylabel(r"distance modulus + SN$_{M}$", fontsize="medium")
+                
         return fig
         
     
