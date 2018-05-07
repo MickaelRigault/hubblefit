@@ -7,11 +7,11 @@ LONG_DESCRIPTION = """ Tools to fit the hubble diagram from SNeIa including flex
 DISTNAME = 'hubblefit'
 AUTHOR = 'Mickael Rigault based on early development from Nicolas Chotard and Stephen Bailey'
 MAINTAINER = 'Mickael Rigault' 
-MAINTAINER_EMAIL = 'mrigault@physik.hu-berlin.de'
+MAINTAINER_EMAIL = 'm.rigault@ipnl.in2p3.fr'
 URL = 'https://github.com/MickaelRigault/hubblefit/'
 LICENSE = 'BSD (3-clause)'
-DOWNLOAD_URL = 'https://github.com/MickaelRigault/hubblefit/tarball/0.2'
-VERSION = '0.2.0'
+DOWNLOAD_URL = 'https://github.com/MickaelRigault/hubblefit/tarball/0.3'
+VERSION = '0.3.0'
 
 try:
     from setuptools import setup, find_packages
@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     if _has_setuptools:
         packages = find_packages()
-        print packages
+        print(packages)
     else:
         # This should be updated if new submodules are added
         packages = ['hubblefit']

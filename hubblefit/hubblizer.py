@@ -5,17 +5,11 @@
 
 import warnings
 import numpy             as np
-import matplotlib.pyplot as mpl
-from   scipy         import stats, linalg, optimize
 
 # - Astropy
 import astropy
 from astropy import constants
-try:
-    from astropy.cosmology import Planck15 as DEFAULT_COSMO
-except:
-    from astropy.cosmology import Planck13 as DEFAULT_COSMO
-    warnings.warn("Your astropy is not up to data. This will use Planck13 cosmology instead of Planck15")
+from astropy.cosmology import Planck15 as DEFAULT_COSMO
 
 # - modefit 
 from modefit.baseobjects import BaseModel, BaseFitter, DataSourceHandler
@@ -86,13 +80,13 @@ def standardization_model(corr):
 class HubbleFit( BaseFitter, DataSourceHandler ):
     """ """
     PROPERTIES         = ["model"]
-    SIDE_PROPERTIES    = ["pec_velocity"]
+    SIDE_PROPERTIES    = ["pec_velocity","fitted_sndata"]
     DERIVED_PROPERTIES = ["sndata","loopcount"]
 
     # =============== #
     #  Main Methods   #
     # =============== #
-    def __init__(self,data, corr, empty=False,
+    def __init__(self, data, corr, empty=False,
                  add_zerror=True, add_lenserr=True):
         """  low-level class to enable to fit a bimodal model on data
         given a probability of each point to belong to a group or the other.
@@ -138,11 +132,108 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         # use_minuit has a setter
         self.set_model(standardization_model(corr))
         self.build_sndata(add_zerror=add_zerror, add_lenserr=add_lenserr)
+
+    # ---------- #
+    #  GETTER    #
+    # ---------- #
+    def get_distmod(self, which="corr", **kwargs):
+        """ This distance modulus are as if SN_M0 = 0"""
+        if which in ["cosmo","model"]:
+            return self.model.cosmo.distmod(self.get("zcmb",**kwargs)).value + self.fitvalues["M0"], 0
+        
+        if which in ["obs","observed", "uncorr","uncorrected"]:
+            return self.get("mag",**kwargs), self.get("mag.err",**kwargs)
+        
+        if which in ["corr","corrected", "standardized"]:
+            return self.get_distmod("obs",**kwargs)[0] - self.model.get_mcorr(self.sndata["corrections"]), np.sqrt(self.model.get_variance(self.sndata["covmatrix"]))
+
+    def get_hubbleres(self, corrected=True,**kwargs):
+        """ """
+        mag,dmag =  self.get_distmod("corr" if corrected else "obs", **kwargs)
+        return mag - self.get_distmod("model",**kwargs)[0], dmag
+
+    def get_systerror_redshift_doppler(self, **kwargs):
+        """ systematic magnitude error caused by errors on redshift and galaxy peculiar motion """
+        dmp = self.get("zcmb.err", **kwargs)**2 + (self.peculiar_velocity/CLIGHT_km_s)**2
+        return  5/np.log(10) * np.sqrt(dmp)/self.get("zcmb",**kwargs)
+
+    # ---------- #
+    # PLOTTER    #
+    # ---------- #
+    def show(self, show_res=True,
+                 show_uncorr=False, show_legend = True,
+                 propmodel={}, propuncorr={}, **kwargs):
+        """ """
+        import matplotlib.pyplot as mpl
+        fig = mpl.figure()
+        if not show_res:
+            ax    = fig.add_axes(111)
+        else:
+            ax    = fig.add_axes([0.12,0.4,0.78,0.55])
+            axres = fig.add_axes([0.12,0.1,0.78,0.27])
+
+        prop = {**dict(ls="None", marker="o", ecolor="0.7", lw=1, alpha=1), **kwargs}
+        propmodel = {**dict( ls="-", color="k", zorder=1), **propmodel}
+        
+        zcmb    = self.get("zcmb")
+        zcmberr = self.get("zcmb.err")
+        flag_used = np.in1d(self.names, self.fitted_snnames)
+        #
+        # Hubble Diagram
+        #
+        
+        ## Uncorrected Hubble
+        if show_uncorr:
+            mag, magerr    = self.get_distmod("obs")
+            ax.errorbar(zcmb, mag, xerr=zcmberr, yerr=magerr,
+                    mfc="None", mec="C1", mew=1., **{**prop,**propuncorr})
+
+        ## Corrected
+        magc,magcerr  = self.get_distmod("corr")
+        #### not used:
+        if np.any(~flag_used):
+            ax.errorbar(zcmb[~flag_used], magc[~flag_used], xerr=zcmberr[~flag_used], yerr=magcerr[~flag_used],
+                            mfc="None", mec="C0", mew=1.,
+                            label="corrected [no used (%d)]"%len(flag_used[~flag_used]),
+                            **prop)
+        #### used:
+        if np.any(flag_used):
+            ax.errorbar(zcmb[flag_used], magc[flag_used], xerr=zcmberr[flag_used], yerr=magcerr[flag_used],
+                            label="corrected [used (%d)]"%len(flag_used[flag_used]),
+                            mfc="C0", mec="None", **prop)
+
+        # Model
+        zz = np.linspace(0.001,0.12,200)
+        ax.plot(zz, self.model.cosmo.distmod(zz).value + self.fitvalues["M0"],
+                    label=self.model.cosmo.name,
+                    **propmodel)
+        #
+        # Hubble Residual
+        #
+        if show_res:
+            hr, dhr = self.get_hubbleres(corrected=True)
+            #### not used:
+            if np.any(~flag_used):
+                axres.errorbar(zcmb[~flag_used], hr[~flag_used], xerr=zcmberr[~flag_used], yerr=dhr[~flag_used],
+                                mfc="None", mec="C0",mew=1.,
+                                   **prop)
+            #### used:
+            if np.any(flag_used):
+                axres.errorbar(zcmb[flag_used], hr[flag_used], xerr=zcmberr[flag_used], yerr=dhr[flag_used],
+                            mfc="C0", mec="None", **prop)
+            
+            axres.axhline(0, **propmodel)
+            ax.set_xticklabels(["" for _ in ax.get_xticklabels()])
+            
+        if show_legend:
+            ax.legend(loc="best")
+        return fig
+        
     
     # ---------- #
     #  BUILDER   #
     # ---------- #
-    def build_sndata(self, add_zerror=True, add_lenserr=True):
+    def build_sndata(self, add_zerror=True, add_lenserr=True, set_it=True, names=None):
         """ build the sndata dictionary used to fit the Hubble diagram
         
         Parameters:
@@ -154,14 +245,17 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
             NB: lensing error is set to 0.055*z (Conley et al. 2011, Betoule et al. 2014)
 
         """
-        self.sndata["zcmb"] = self.get("zcmb")
-        self.sndata["mag"]  = self.get("mag")
-        self.sndata["corrections"] = np.asarray([self.get(param) for param in self.model.STANDARDIZATION])
-        covmat_init = np.zeros((self.npoints, self.model.nstandardization_coef, self.model.nstandardization_coef))
+        sndata = {"names": self.names if names is None else names,
+                  "zcmb":self.get("zcmb", names),
+                  "mag":self.get("mag", names),
+                  "corrections": np.asarray([self.get(param, names) for param in self.model.STANDARDIZATION])}
+        npoints = self.npoints if names is None else len(names)
+            
+        covmat_init = np.zeros((npoints, self.model.nstandardization_coef, self.model.nstandardization_coef))
         
         # - diag error
         for i,name in enumerate(["mag"]+self.model.STANDARDIZATION):
-            covmat_init[:self.npoints,i,i] = self.get("%s.err"%name, default=0) **2
+            covmat_init[:npoints,i,i] = self.get("%s.err"%name, names, default=0) **2
             
         # - off diag error
         for i,name1 in enumerate(["mag"]+self.model.STANDARDIZATION):
@@ -170,18 +264,24 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
                     continue
                 # cov_ab is the same as cov_ba. Which one was set?
                 cov_ab = self.get("cov_%s%s"%(name1,name2), default=0)
-                if np.all(cov_ab==0): cov_ab = self.get("cov_%s%s"%(name2,name1), default=0)
+                if np.all(cov_ab==0): cov_ab = self.get("cov_%s%s"%(name2,name1), names, default=0)
                     
-                covmat_init[:self.npoints,i,j] = covmat_init[:self.npoints,j,i] = cov_ab
+                covmat_init[:npoints,i,j] = covmat_init[:npoints,j,i] = cov_ab
             
         # - set it
-        self.set_covariance_matrix(covmat_init, add_zerror=add_zerror, add_lenserr=add_lenserr)
+        sndata["covmatrix"] = self.get_covariance_matrix(covmat_init,
+                                                        add_zerror=add_zerror, add_lenserr=add_lenserr, names=names)
+        
+        if set_it:
+            self._derived_properties["sndata"] = sndata
+        else:
+            return sndata
 
     # -------- #
     #  FITTER  #
     # -------- #
     # This is only there for the intrinsic stuff
-    def fit(self, verbose=True, intrinsic=0.0,
+    def fit(self, verbose=True, intrinsic=0.0, names=None,
             seek_chi2dof_1=True, chi2dof_margin=0.01,
             use_minuit=None, kfold=None, nsamples=1000, **kwargs):
         """ fit the data on the model
@@ -227,6 +327,11 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         Void, create output model values.
         """
         from modefit.utils import kwargs_update
+        if names is not None:
+            self._side_properties["fitted_sndata"] = self.build_sndata(names=names,
+                                                                           add_lenserr=self._has_lesserr,
+                                                                           add_zerror=self._has_zerror,
+                                                                           set_it=False)
         # count the lopping to avoid infinit loops
         self._increment_loop_()
         # set the intrinsic dispersion.
@@ -265,6 +370,7 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         -------
         float (intrinsic magnitude dispersion)
         """
+        from scipy import optimize
         def get_intrinsic_chi2dof(intrinsic):
             self.model.set_intrinsic(intrinsic)
             return np.abs(self.get_modelchi2(self._fitparams) / self.dof -1)
@@ -300,15 +406,16 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         -------
         float (-2*log(likelihood))
         """
-        return -2*self.model.get_loglikelihood(self.sndata["zcmb"], self.sndata["mag"],
-                               self.sndata["corrections"], self.sndata["covmatrix"],
+        return -2*self.model.get_loglikelihood(self.fitted_sndata["zcmb"], self.fitted_sndata["mag"],
+                               self.fitted_sndata["corrections"], self.fitted_sndata["covmatrix"],
                                parameters=parameters)
         
     # -------- #
     #  SETTER  #
     # -------- #
     # - Covariance Matrix  
-    def set_covariance_matrix(self, covmatrix, add_zerror=True, add_lenserr=True):
+    def get_covariance_matrix(self, covmatrix, add_zerror=True, add_lenserr=True,
+                                  verbose=False, **kwargs):
         """ sets a copy of the given covariance matrix to the sndata,
         which is used to fit the Hubble Fit.
         
@@ -331,13 +438,20 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         
         covmat = covmatrix.copy()
         if add_zerror:
-            print "add_magerr_to_covmatrix:  zerror"
-            self.add_magerr_to_covmatrix(covmat, self.systerror_redshift_doppler**2)
+            if verbose: print("add_magerr_to_covmatrix:  zerror")
+            self._has_zerror = True
+            self.add_magerr_to_covmatrix(covmat, self.get_systerror_redshift_doppler(**kwargs)**2)
+        else:
+            self._has_zerror = False
+            
         if add_lenserr:
-            print "add_magerr_to_covmatrix: lensing error"
-            self.add_magerr_to_covmatrix(covmat, (0.055*self.get("zcmb"))**2)
-                
-        self.sndata["covmatrix"] = covmat
+            if verbose: print("add_magerr_to_covmatrix: lensing error")
+            self._has_lesserr = True
+            self.add_magerr_to_covmatrix(covmat, (0.055*self.get("zcmb", **kwargs))**2)
+        else:
+            self._has_lesserr = False
+        return covmat
+    
 
     def add_magerr_to_covmatrix(self, covmat, value):
         """ add a diagonal (0,0) term to the covariance (magnitde error)
@@ -350,10 +464,10 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         Void
         """
         if not hasattr(value,"__iter__"):
-            for i in range(self.npoints):
+            for i in range(len(covmat)):
                 covmat[i][0][0] += value
         else:
-            for i in range(self.npoints):
+            for i in range(len(covmat)):
                 covmat[i][0][0] += value[i]
     
     # - Peculiar Velocity
@@ -375,18 +489,14 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         """
         if velocity_km_s is None:
             velocity_km_s = PECULIAR_VELOCITY
-
-        if hasattr(velocity_km_s,"__iter__"):
-            if len(velocity_km_s) != self.npoints:
-                raise ValueError("velocity_km_s must have the same size of the number of data (%d vs. %d)."%(len(velocity_km_s),self.npoints)+\
-                                 " It could otherwise be a single float")
-            else:
-                velocity_km_s = np.asarray(velocity_km_s)
-
+            
         # - Set it: Float or numpy array
         self._side_properties["pec_velocity"] = velocity_km_s
 
-    
+    # --------- #
+    #  PLOT     #
+    # --------- #
+
     # =============== #
     #  Properties     #
     # =============== #
@@ -399,6 +509,19 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
         return self._side_properties["pec_velocity"]
 
     # - Derived Properties
+    
+    @property
+    def fitted_snnames(self):
+        """ names of the supernovae used for the Hubble Fit """
+        return self.fitted_sndata["names"]
+    
+    @property
+    def fitted_sndata(self):
+        """ """
+        if self._side_properties['fitted_sndata'] is None:
+            return self.sndata
+        return self._side_properties['fitted_sndata']
+            
     @property
     def sndata(self):
         """ dictionary containing data for standardization """
@@ -411,12 +534,6 @@ class HubbleFit( BaseFitter, DataSourceHandler ):
             
         return self._derived_properties["sndata"]
     
-    @property
-    def systerror_redshift_doppler(self):
-        """ systematic magnitude error caused by errors on redshift and galaxy peculiar motion """
-        dmp = self.get("zcmb.err")**2 + (self.peculiar_velocity/CLIGHT_km_s)**2
-        return  5/np.log(10) * np.sqrt(dmp)/self.get("zcmb")
-
     @property
     def _loopcount(self):
         """ Number of time the looping is called"""
@@ -471,17 +588,18 @@ class ModelStandardization( BaseModel ):
         -------
         Array (m_model)
         """
-        # -- correction alpha*stretch + beta*color
-        if corrections is None:
-            mcorr = 0
-        else:
-            mcorr = np.sum([ self.standardization_coef[alpha]*coef
-                            for alpha,coef in zip(self.FREEPARAMETERS_STD, corrections)],
-                            axis=0)
-            
         # - model
-        return self.cosmo.distmod(z).value + self.standardization_coef.get("M0",-19) + mcorr
-        
+        return self.cosmo.distmod(z).value + self.standardization_coef.get("M0",-19) + self.get_mcorr(corrections)
+
+    def get_mcorr(self, corrections):
+        """ magnitude correction caused by the standardization 
+        e.g alpha*stretch + beta*color # beta will be negative
+        """
+        return 0 if corrections is None else \
+          np.sum([ self.standardization_coef[alpha]*coef
+                    for alpha,coef in zip(self.FREEPARAMETERS_STD, corrections)],
+                     axis=0)
+    
     def get_loglikelihood(self, z, mag, corrections, covmatrix, parameters=None):
         """ The loglikelihood (-0.5*chi2) of the data given the model
 
