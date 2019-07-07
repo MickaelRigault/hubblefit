@@ -5,7 +5,7 @@
 
 import warnings
 import numpy             as np
-
+from scipy import stats
 # - Astropy
 import astropy
 from astropy import constants
@@ -81,7 +81,7 @@ class HubbleFit( BaseFitter ):
     """ """
     PROPERTIES         = ["model", "data", "hdkeys"]
     SIDE_PROPERTIES    = ["pec_velocity"]
-    DERIVED_PROPERTIES = ["datafitted","covmatrix","loopcount"]
+    DERIVED_PROPERTIES = ["datafitted","covmat","loopcount"]
 
     # =============== #
     #  Main Methods   #
@@ -190,7 +190,7 @@ class HubbleFit( BaseFitter ):
 
         # Record it
         self._derived_properties["datafitted"] = sndata
-        self._derived_properties["covmatrix"]  = covmat_init
+        self._derived_properties["covmat"]  = covmat_init
         
     # ---------- #
     #  GETTER    #
@@ -212,7 +212,7 @@ class HubbleFit( BaseFitter ):
             return self.get(self._hdkeys["mb"]), self.get(self._hdkeys["mb.err"])
         
         if which in ["corr","corrected", "standardized"]:
-            return self.get_distmod("obs")[0] - self.model.get_mcorr(self._standard_corrections), np.sqrt(self.model.get_variance(self.covmatrix))
+            return self.get_distmod("obs")[0] - self.model.get_mcorr(self._standard_corrections), np.sqrt(self.model.get_variance(self.covmat))
 
     def get_hubbleres(self, corrected=True):
         """ """
@@ -229,7 +229,7 @@ class HubbleFit( BaseFitter ):
     # -------- #
     # This is only there for the intrinsic stuff
     def fit(self, verbose=True, intrinsic=0.0, names=None,
-            seek_chi2dof_1=True, chi2dof_margin=0.01,
+            seek_chi2dof_1=True, chi2dof_margin=0.01, fit_intrinsic=False,
             use_minuit=None, kfold=None, nsamples=1000, **kwargs):
         """ fit the data on the model
 
@@ -289,7 +289,7 @@ class HubbleFit( BaseFitter ):
         
         #  Check intrinsic
         # ----------------
-        if np.abs(self.fitvalues["chi2"]/self.dof - 1)>chi2dof_margin and seek_chi2dof_1 and self._loopcount<20:
+        if fit_intrinsic and (np.abs(self.fitvalues["chi2"]/self.dof - 1)>chi2dof_margin and seek_chi2dof_1 and self._loopcount<20):
             # => Intrinsic to be added
             if verbose:
                 print(" Look for intrinsic dispersion: current chi2 %.2f for %d dof"%(self.fitvalues["chi2"],self.dof))
@@ -301,6 +301,7 @@ class HubbleFit( BaseFitter ):
             if verbose:
                 print(" Used intrinsic dispersion %.3f: chi2 %.2f for %d dof"%(self.model.intrinsic_dispersion, self.fitvalues["chi2"], self.dof))
             return output
+
         
     def fit_intrinsic(self, intrinsic_guess=0.1):
         """ Get the most optimal intrinsic dispersion given the current fitted standardization parameters. 
@@ -421,7 +422,7 @@ class HubbleFit( BaseFitter ):
     def _get_model_args_(self):
         """ see model.get_loglikelihood"""
         # corresponding data entry:
-        return self._zcmb, self._mb, self._standard_corrections, self.covmatrix
+        return self._zcmb, self._mb, self._standard_corrections, self.covmat
 
     @property
     def _zcmb(self):
@@ -439,9 +440,9 @@ class HubbleFit( BaseFitter ):
         return self.datafitted[self.standardized_by].values.T
 
     @property
-    def covmatrix(self):
+    def covmat(self):
         """ """
-        return self._derived_properties["covmatrix"]
+        return self._derived_properties["covmat"]
 
     @property
     def datafitted(self):
@@ -557,6 +558,9 @@ class ModelStandardization( BaseModel ):
     DERIVED_PROPERTIES = []
 
     M0_guess=-19.
+    sigmaint_guess = 0.1
+    sigmaint_boundaries=[0.01, 0.2]
+    
     # ================ #
     #  Main Method     #
     # ================ #
@@ -564,7 +568,7 @@ class ModelStandardization( BaseModel ):
         """ Black Magic allowing generalization of standardization models """
         
         cls.FREEPARAMETERS_STD = ["a%d"%(i+1) for i in range(len(cls.STANDARDIZATION))]
-        cls.FREEPARAMETERS     = ["M0"]+cls.FREEPARAMETERS_STD
+        cls.FREEPARAMETERS     = ["M0","sigmaint"]+cls.FREEPARAMETERS_STD
         return super(ModelStandardization,cls).__new__(cls)
         
     # -------------------- #
@@ -575,6 +579,8 @@ class ModelStandardization( BaseModel ):
         for name,v in zip(self.FREEPARAMETERS, parameters):
             self.standardization_coef[name] = v
 
+        self.set_intrinsic(self.standardization_coef["sigmaint"])
+        
     def get_model(self, z, corrections):
         """ the magnitude that should be compared to the observed one:
         m_model = cosmology's distance-modulus + M_0 + standardization
@@ -594,7 +600,7 @@ class ModelStandardization( BaseModel ):
                     for alpha, coef in zip(self.FREEPARAMETERS_STD, corrections)],
                 axis=0) if corrections is not None else 0
     
-    def get_loglikelihood(self, z, mag, corrections, covmatrix):
+    def get_loglikelihood(self, z, mag, corrections, covmat):
         """ The loglikelihood (-0.5*chi2) of the data given the model
 
         for N data with M correction (i.e. if x_1 and c standardization, M=2 )
@@ -607,7 +613,7 @@ class ModelStandardization( BaseModel ):
         correction: [NxM array]
             correction parameter for each SNe
 
-        covmatrix: [NxM+1xM+1 matrix]
+        covmat: [NxM+1xM+1 matrix]
             +1 because of M0
             The full covariance matrix between the standardization parameters and M0
 
@@ -620,11 +626,12 @@ class ModelStandardization( BaseModel ):
         -------
         float (-0.5*chi2)
         """
-        res = mag - self.get_model(z, corrections)
-        var = self.get_variance(covmatrix)
+        model = self.get_model(z, corrections)
+        var = self.get_variance(covmat)
         if np.any(var<0):
             return -np.inf
-        return -0.5 * np.sum(res**2 / var )
+        likelihood = stats.norm.pdf(mag, loc= model, scale=np.sqrt(var))
+        return np.sum( np.log(likelihood) )
 
     def lnprior(self,parameter):
         """ flat prior """
@@ -650,7 +657,7 @@ class ModelStandardization( BaseModel ):
         
         self._side_properties["sigma_int"] = intrinsic_disp
 
-    def get_variance(self, covmatrix):
+    def get_variance(self, covmat):
         """ returns the variance estimated from the covariance matrix.
         
         It takes into account the current standardization coef. (alpha, beta etc).
@@ -663,7 +670,7 @@ class ModelStandardization( BaseModel ):
         a_ = np.matrix(np.concatenate([[1.0],[self.standardization_coef[k]
                                       for k in self.FREEPARAMETERS_STD]]))
         
-        return np.array([np.dot(a_, np.dot(c, a_.T)).sum() for c in covmatrix]) + self.intrinsic_dispersion**2 
+        return np.array([np.dot(a_, np.dot(c, a_.T)).sum() for c in covmat]) + self.intrinsic_dispersion**2 
 
     def set_cosmo(self, cosmo):
         """ """

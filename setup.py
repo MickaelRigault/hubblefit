@@ -10,8 +10,8 @@ MAINTAINER = 'Mickael Rigault'
 MAINTAINER_EMAIL = 'm.rigault@ipnl.in2p3.fr'
 URL = 'https://github.com/MickaelRigault/hubblefit/'
 LICENSE = 'BSD (3-clause)'
-DOWNLOAD_URL = 'https://github.com/MickaelRigault/hubblefit/tarball/0.3'
-VERSION = '0.3.1'
+DOWNLOAD_URL = 'https://github.com/MickaelRigault/hubblefit/tarball/0.4'
+VERSION = '0.4.0'
 
 try:
     from setuptools import setup, find_packages
