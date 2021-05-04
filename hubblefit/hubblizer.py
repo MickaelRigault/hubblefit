@@ -87,7 +87,7 @@ class HubbleFit( BaseFitter ):
     #  Main Methods   #
     # =============== #
     def __init__(self, data, corr, empty=False,
-                 add_zerror=True, add_lenserr=True, build=False):
+                 add_zerror=True, add_lenserr=True, build=False, **kwargs):
         """  low-level class to enable to fit a bimodal model on data
         given a probability of each point to belong to a group or the other.
 
@@ -98,8 +98,8 @@ class HubbleFit( BaseFitter ):
             {name: {k: value1, k.err: err1,
                     k2: value2, k2.err, err2,
                     k3: value3,
-                    cov_kk2: cov_between_k_and_k2,
-                    cov_k2k: cov_between_k_and_k2,
+                    cov_k_k2: cov_between_k_and_k2,
+                    cov_k2_k: cov_between_k_and_k2,
                     etc.
                    }}
             empty entries will be assumed to be 0
@@ -128,7 +128,7 @@ class HubbleFit( BaseFitter ):
         # use_minuit has a setter
         self.set_model(standardization_model(corr))
         if build:
-            self.build_sndata(add_zerror=add_zerror, add_lenserr=add_lenserr)
+            self.build_sndata(add_zerror=add_zerror, add_lenserr=add_lenserr, **kwargs)
 
     # ---------- #
     #  SETTER    #
@@ -148,15 +148,21 @@ class HubbleFit( BaseFitter ):
         self._hdkeys["mb.err"] = keyerr
         
         
-    def build_sndata(self, add_zerror=True, add_lenserr=True, maskout=None):
+    def build_sndata(self, add_zerror=True, add_lenserr=True, maskout=None, verbose=True, **extra):
         """ """
+        if verbose:
+            print("Building sndata...")
         sndata = self.data[[self._hdkeys["zcmb"],self._hdkeys["zcmb.err"]] +
                            [self._hdkeys["mb"], self._hdkeys["mb.err"]]    +
                            [k for k in self.standardized_by] + [ k+".err" for k in self.standardized_by if k+".err" in self.data]
                           ]
         npoints = len(sndata)
+        if verbose:
+            print(sndata)
 
         # Build covariance matrix
+        if verbose:
+            print("Building covariance matrix...")
         covmat_init = np.zeros((npoints, self.model.nstandardization_coef, self.model.nstandardization_coef))
         
         # Diagonal terms (errors => Variance)
@@ -170,9 +176,15 @@ class HubbleFit( BaseFitter ):
                     continue
                 # cov_ab is the same as cov_ba. Which one was set?
                 cov_a_b = self.get("cov_%s_%s"%(name1,name2), default=0)
-                if np.all(cov_a_b==0): 
+                if np.all(cov_a_b==0):
                     cov_a_b = self.get("cov_%s_%s"%(name2,name1), default=0)
-
+                    if not np.all(cov_a_b==0) and verbose:
+                        print(f"Found cov_{name2}_{name1} within input data columns.")
+                    elif np.all(cov_a_b==0) and verbose:
+                        print(f"Neither cov_{name1}_{name2} nor cov_{name2}_{name1} found within input data columns.")
+                elif not np.all(cov_a_b==0) and verbose:
+                    print(f"Found cov_{name1}_{name2} within input data columns.")
+                        
                 covmat_init[:npoints,i,j] = covmat_init[:npoints,j,i] = cov_a_b
 
         # Update the covariance matrix with various diagonal terms
@@ -187,6 +199,9 @@ class HubbleFit( BaseFitter ):
             covmat_init[:,0,0] += (0.055*self.get(self._hdkeys["zcmb"]))**2
         else:
             self._has_lesserr = False
+        
+        if verbose:
+            print(covmat_init)
 
         # Record it
         self._derived_properties["datafitted"] = sndata
